@@ -1,0 +1,430 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f6f6f4">
+<title>Heatmap Obergeschoss</title>
+<style>
+  :root { --bg:#f6f6f4; --fg:#1d1d1b; --muted:#6b6b66; --card:#fff; --line:#d9d9d4; --acc:#1f6feb; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  html { -webkit-text-size-adjust:100%; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  main { max-width:1180px; margin:0 auto; padding:20px max(16px,env(safe-area-inset-right)) calc(40px + env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left)); }
+  h1 { font-size:20px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 16px; }
+  .grid { display:grid; grid-template-columns:minmax(0,1fr) 340px; gap:16px; }
+  @media (max-width:900px){ .grid{ grid-template-columns:1fr; } }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; }
+  canvas { max-width:100%; height:auto; display:block; }
+  #plan { cursor:pointer; touch-action:manipulation; }
+  #cellInfo { min-height:20px; color:var(--muted); font-size:13px; }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin:6px 0; }
+  label { color:var(--muted); }
+  select, button, input[type=number] { font:inherit; min-height:40px; touch-action:manipulation; padding:5px 8px; border:1px solid var(--line); border-radius:6px; background:#fff; }
+  button { cursor:pointer; }
+  button.on { background:var(--acc); color:#fff; border-color:var(--acc); }
+  input[type=range] { flex:1; }
+  .doors button { min-width:88px; }
+  .doors button.open { background:#e7f6ea; border-color:#5bb36a; }
+  .doors button.closed { background:#fbe9e7; border-color:#d0675a; }
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  td, th { padding:3px 4px; border-bottom:1px solid var(--line); text-align:right; }
+  td:first-child, th:first-child { text-align:left; }
+  .hour { font-size:26px; font-weight:600; font-variant-numeric:tabular-nums; }
+  .note { color:var(--muted); font-size:12.5px; }
+  #busy { color:var(--acc); font-weight:600; }
+  .bar { position:sticky; top:0; z-index:5; background:var(--card); padding:6px 0; }
+  @media (max-width:600px){
+    body { font-size:15px; }
+    main { padding-top:12px; }
+    h1 { font-size:18px; }
+    .card { padding:10px; border-radius:8px; }
+    select, input[type=number] { font-size:16px; } /* verhindert Auto-Zoom in iOS */
+    select { width:100%; }
+    .doors button { flex:1 1 40%; }
+    .hour { font-size:22px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Obergeschoss Stolzenau: Temperaturverteilung am Hitzetag</h1>
+  <p class="sub">2D-Wärmebilanzmodell, Raster 25 cm, maßstabsgetreu nach Bauplan. Türen im Plan anklicken, um sie zu öffnen oder zu schließen.</p>
+
+  <div class="grid">
+    <div class="card">
+      <div class="row bar">
+        <span class="hour" id="hourLbl">15:00</span>
+        <input type="range" id="hour" min="0" max="23" value="15">
+        <button id="play">▶ Abspielen</button>
+      </div>
+      <canvas id="plan" width="720" height="610"></canvas>
+      <div id="cellInfo">Raster antippen für Temperatur am Punkt</div>
+      <canvas id="legend" width="720" height="40"></canvas>
+      <canvas id="chart" width="720" height="250"></canvas>
+    </div>
+
+    <div>
+      <div class="card">
+        <div class="row"><label>Variante</label>
+          <select id="variant">
+            <option value="1">V1: 3 Wandgeräte (5.500 €)</option>
+            <option value="2">V2: 1 Kassette im Flur (4.000 €)</option>
+            <option value="0">ohne Klimaanlage</option>
+          </select></div>
+        <div class="row"><label>Außentemperatur max.</label>
+          <input type="number" id="tmax" value="40" min="28" max="44" step="1" style="width:70px"> °C</div>
+        <div class="row"><label>Sollwert</label>
+          <input type="number" id="sp" value="22" min="18" max="28" step="0.5" style="width:70px"> °C</div>
+        <div class="row"><label>Türen</label>
+          <button id="allOpen">alle auf</button><button id="allClosed">alle zu</button></div>
+        <div class="row doors" id="doorBtns"></div>
+        <div class="row"><span id="busy"></span></div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <table id="tbl"></table>
+        <p class="note" id="sumLine"></p>
+      </div>
+      <div class="card note" style="margin-top:16px">
+        <b>Annahmen</b> (KfW-55-Haus, wie raummodell.py): Außentemperatur Tmax−15 K nachts bis Tmax um 15 Uhr, Dach U = 0,18 W/m²K, Giebelwand U = 0,2, Fenster U = 1,1, jeweils mit Sonnenaufschlag bis +25 K,
+        Speichermasse 90 kJ/m²K (massive Wände), Luftwechsel 0,15/h (luftdicht), Personen nachts 22–7 Uhr (Eltern 160 W, Kinder je 80 W).
+        Erdgeschoss 26 °C bei 35 °C außen (+0,3 K je K darüber), Treppenöffnung mit Luftaustausch zum EG.
+        Offene Tür: Auftriebsströmung, geschlossene Tür: 3 W/K Leckage.
+        Leistungsabfall der Geräte 1 % je K Außentemperatur über 20 °C. Klima läuft rund um die Uhr. Gezeigt wird der 3. Tag einer Hitzeperiode.
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ---------------- Geometrie (Meter, Innenmaße, links = Süd, rechts = Nord, oben = West) ----------------
+const DX = 0.25, NX = 45, NY = 35, H = 2.4, RC = 1206;
+const ZN = ['Kind I', 'Kind II', 'Flur', 'Büro', 'Eltern', 'Bad'];
+const RECTS = [ // [Zone, x0, y0, x1, y1]; spätere überschreiben frühere
+  [0, 0, 0, 4.25, 4.25], [1, 0, 4.25, 4, 8.75], [2, 4.25, 0, 7, 6.75], [2, 4, 5.75, 4.25, 6.75],
+  [3, 4, 6.75, 7, 8.75], [4, 7, 0, 11.25, 4.75], [5, 7, 4.75, 11.25, 8.75],
+];
+const STAIR = [3, 4.25, 5.25, 6.0];
+const DOORS = [
+  { n: 'Kind I',  o: 'v', at: 4.25, a: 2.25, b: 3.25 },
+  { n: 'Kind II', o: 'v', at: 4.0,  a: 6.0,  b: 6.75 },
+  { n: 'Eltern',  o: 'v', at: 7.0,  a: 3.0,  b: 4.0 },
+  { n: 'Bad',     o: 'v', at: 7.0,  a: 5.0,  b: 5.75 },
+  { n: 'Büro',    o: 'h', at: 6.75, a: 5.0,  b: 5.75 },
+];
+const WINDOWS = [ // Seite L/R/T/B, Bereich entlang der Wand, Fläche m², Ausrichtung
+  { s: 'L', a: 1.75, b: 3.25, A: 1.5, d: 'S' }, { s: 'L', a: 5.5, b: 7.0, A: 1.5, d: 'S' },
+  { s: 'R', a: 2.0, b: 3.5, A: 2.0, d: 'N' }, { s: 'R', a: 5.75, b: 7.0, A: 1.0, d: 'N' },
+  { s: 'T', a: 5.0, b: 6.25, A: 1.5, d: 'W' }, { s: 'B', a: 5.0, b: 6.25, A: 1.2, d: 'E' },
+];
+const UNITS = {
+  1: [{ z: 0, x: 4.1, y: 1.6, cap: 3.2 }, { z: 1, x: 3.85, y: 7.4, cap: 3.2 }, { z: 4, x: 7.15, y: 1.6, cap: 3.2 }],
+  2: [{ z: 2, x: 5.6, y: 2.0, cap: 5.9 }],
+  0: [],
+};
+const ODU = { 1: 7.0, 2: 5.9, 0: 0 };
+const PERSONS = [80, 80, 0, 0, 160, 0];
+
+// ---------------- Parameter (aus raummodell.py) ----------------
+const U_ROOF = 0.18, U_WIN = 1.1, U_GABLE = 0.2, ACH = 0.15, MASS = 90e3, G_SOLAR = 0.35;  // KfW-55-Haus, massive Wände
+const DOOR_H = 2.0, CD = 0.6, U_FLOOR = 1.2, DOOR_CLOSED_UA = 3.0, U_PART = 1.0;
+const G_IN = 150;          // W/K je Zellfläche: Luftdurchmischung innerhalb eines Raums
+const G_STAIR = 50;        // W/K Treppenöffnung <-> Erdgeschoss
+const DT = 4, DAYS = 3;
+
+// ---------------- Zellen ----------------
+const N = NX * NY, zone = new Int8Array(N), stair = new Uint8Array(N);
+const cx = i => (i + 0.5) * DX, idx = (i, j) => j * NX + i;
+for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+  const x = cx(i), y = cx(j), c = idx(i, j);
+  for (const [z, x0, y0, x1, y1] of RECTS) if (x > x0 && x < x1 && y > y0 && y < y1) zone[c] = z;
+  if (x > STAIR[0] && x < STAIR[2] && y > STAIR[1] && y < STAIR[3]) { zone[c] = 2; stair[c] = 1; }
+}
+const nStair = stair.reduce((s, v) => s + v, 0);
+
+// Flächen zwischen Zellen: Typ 0 = Raumluft, 1 = Wand, 2 = Tür
+const FA = [], FB = [], FT = [], FD = [], FG = [];
+function doorAt(o, at, along) {
+  return DOORS.findIndex(d => d.o === o && Math.abs(d.at - at) < 1e-6 && along > d.a && along < d.b);
+}
+for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+  const c = idx(i, j);
+  for (const [di, dj] of [[1, 0], [0, 1]]) {
+    const ii = i + di, jj = j + dj;
+    if (ii >= NX || jj >= NY) continue;
+    const n = idx(ii, jj);
+    FA.push(c); FB.push(n);
+    if (zone[c] === zone[n]) { FT.push(0); FD.push(-1); FG.push(G_IN); continue; }
+    const d = di ? doorAt('v', ii * DX, cx(j)) : doorAt('h', jj * DX, cx(i));
+    FT.push(d >= 0 ? 2 : 1); FD.push(d); FG.push(U_PART * DX * H);
+  }
+}
+const NF = FA.length;
+const doorFaces = DOORS.map((_, k) => FD.filter(v => v === k).length);
+
+// Außenbezüge je Zelle
+const C = new Float64Array(N), gRoof = new Float64Array(N), roofDir = new Int8Array(N), gAmb = new Float64Array(N);
+const winA = new Float64Array(N), winDir = new Array(N).fill(null);
+for (let j = 0; j < NY; j++) for (let i = 0; i < NX; i++) {
+  const c = idx(i, j), y = cx(j), a = DX * DX;
+  C[c] = a * (MASS + H * RC);
+  const slope = y < 2.0 || y > 6.75;           // Dachschrägen an den Traufseiten
+  gRoof[c] = a * U_ROOF * (slope ? 1.6 : 1.0);
+  roofDir[c] = y < 2.0 ? 1 : y > 6.75 ? 2 : 0;  // 1 = West, 2 = Ost, 0 = Decke
+  gAmb[c] = a * H * ACH / 3600 * RC;
+  if (i === 0 || i === NX - 1) gAmb[c] += U_GABLE * DX * H;
+}
+for (const w of WINDOWS) {
+  const cells = [];
+  for (let k = 0; k < (w.s === 'L' || w.s === 'R' ? NY : NX); k++) {
+    const p = cx(k);
+    if (p < w.a || p > w.b) continue;
+    cells.push(w.s === 'L' ? idx(0, k) : w.s === 'R' ? idx(NX - 1, k) : w.s === 'T' ? idx(k, 0) : idx(k, NY - 1));
+  }
+  for (const c of cells) { winA[c] += w.A / cells.length; winDir[c] = w.d; }
+}
+
+// ---------------- Klima und Sonne ----------------
+const tOut = (h, tmax) => tmax - 7.5 + 7.5 * Math.cos(2 * Math.PI * (h - 15) / 24);
+const sun = h => (h >= 6 && h <= 20) ? Math.max(0, Math.sin(Math.PI * (h - 6) / 14)) : 0;
+function orient(d, h) {   // relative Einstrahlung je Ausrichtung (0..1)
+  if (h < 6 || h > 20) return 0;
+  const lobe = (pk, w) => Math.max(0, Math.cos((h - pk) * Math.PI / w));
+  if (d === 'N') return 0.2 * sun(h);
+  if (d === 'S') return 0.25 * sun(h) + 0.75 * lobe(13, 10);
+  if (d === 'E') return 0.2 * sun(h) + 0.8 * lobe(9, 8);
+  return 0.2 * sun(h) + 0.8 * lobe(17, 8);
+}
+
+// ---------------- Simulation ----------------
+function simulate(variant, tmax, sp, doorOpen) {
+  const units = UNITS[variant].map(u => {
+    const w = new Float64Array(N); let s = 0;
+    for (let c = 0; c < N; c++) if (zone[c] === u.z) {
+      const d2 = (cx(c % NX) - u.x) ** 2 + (cx((c / NX) | 0) - u.y) ** 2;
+      w[c] = Math.exp(-d2 / (2 * 1.3 * 1.3)); s += w[c];
+    }
+    for (let c = 0; c < N; c++) w[c] /= s;
+    return { ...u, w };
+  });
+  const derate = 1 - 0.01 * (tmax - 20);
+  const oduMax = ODU[variant] * derate * 1000;
+  const tEG = 26 + 0.3 * (tmax - 35);
+  const T = new Float64Array(N).fill(28), Q = new Float64Array(N);
+  const steps = DAYS * 86400 / DT, rec = [];
+  const doorG = DOORS.map((_, k) => DOOR_CLOSED_UA / doorFaces[k]);
+  for (let k = 0; k <= steps; k++) {
+    const t = k * DT / 3600, h = t % 24;
+    const to = tOut(h, tmax), saW = to + 25 * orient('W', h), saE = to + 25 * orient('E', h), saC = to + 25 * sun(h);
+    const night = h >= 22 || h < 7;
+    for (let c = 0; c < N; c++) {
+      const sa = roofDir[c] === 1 ? saW : roofDir[c] === 2 ? saE : saC;
+      let q = gRoof[c] * (sa - T[c]) + gAmb[c] * (to - T[c]) + DX * DX * U_FLOOR * (tEG - T[c]);
+      if (winA[c]) q += winA[c] * (U_WIN * (to - T[c]) + 700 * G_SOLAR * orient(winDir[c], h));
+      if (stair[c]) q += G_STAIR / nStair * (tEG - T[c]);
+      Q[c] = q;
+    }
+    if (night) for (let c = 0; c < N; c++) if (PERSONS[zone[c]]) Q[c] += PERSONS[zone[c]] * DX * DX / zoneArea[zone[c]];
+    for (let f = 0; f < NF; f++) {
+      const a = FA[f], b = FB[f], dT = T[b] - T[a];
+      let g = FG[f];
+      if (FT[f] === 2) g = doorOpen[FD[f]]
+        ? RC * CD / 3 * DX * DOOR_H * Math.sqrt(9.81 * DOOR_H * Math.abs(dT) / 300)
+        : doorG[FD[f]];
+      Q[a] += g * dT; Q[b] -= g * dT;
+    }
+    // Regelung: proportional auf Ansaugtemperatur, Begrenzung je Gerät und durch Außengerät
+    let tot = 0;
+    for (const u of units) {
+      let ts = 0; for (let c = 0; c < N; c++) if (u.w[c]) ts += u.w[c] * T[c];
+      u.ts = ts; u.dem = Math.min(u.cap * derate, Math.max(0, (ts - sp) * 1.5)) * 1000; tot += u.dem;
+    }
+    const scale = tot > oduMax ? oduMax / tot : 1;
+    for (const u of units) { u.p = u.dem * scale; for (let c = 0; c < N; c++) if (u.w[c]) Q[c] -= u.p * u.w[c]; }
+    if (t >= (DAYS - 1) * 24 && Math.abs(h - Math.round(h)) < DT / 7200 && rec.length < 24) {
+      rec.push({ h: Math.round(h) % 24, T: Float32Array.from(T), out: to, p: units.reduce((s, u) => s + u.p, 0) });
+    }
+    for (let c = 0; c < N; c++) T[c] += DT * Q[c] / C[c];
+  }
+  rec.sort((a, b) => a.h - b.h);
+  return rec;
+}
+const zoneArea = ZN.map((_, z) => zone.reduce((s, v) => s + (v === z ? DX * DX : 0), 0));
+
+// ---------------- Darstellung ----------------
+const S = 60, OX = 22, OY = 22;   // 60 px je Meter
+const plan = document.getElementById('plan'), ctx = plan.getContext('2d');
+const STOPS = [[18, [44, 123, 182]], [22, [171, 217, 233]], [26, [255, 255, 191]], [30, [253, 174, 97]], [34, [215, 25, 28]], [40, [110, 0, 20]]];
+function color(t) {
+  if (t <= STOPS[0][0]) return `rgb(${STOPS[0][1]})`;
+  for (let k = 1; k < STOPS.length; k++) if (t <= STOPS[k][0]) {
+    const [t0, c0] = STOPS[k - 1], [t1, c1] = STOPS[k], f = (t - t0) / (t1 - t0);
+    return `rgb(${c0.map((v, m) => Math.round(v + f * (c1[m] - v))).join(',')})`;
+  }
+  return `rgb(${STOPS[STOPS.length - 1][1]})`;
+}
+const zoneMean = (T, z) => { let s = 0, n = 0; for (let c = 0; c < N; c++) if (zone[c] === z) { s += T[c]; n++; } return s / n; };
+const LABEL_POS = [[2.1, 2.1], [1.9, 6.6], [5.6, 1.0], [5.5, 7.9], [9.1, 2.3], [9.1, 6.8]];
+
+let state = { variant: 1, tmax: 40, sp: 22, doors: DOORS.map(() => true), hour: 15, rec: null };
+
+const fk = cv => Math.min(2.2, Math.max(1, cv.width / (cv.clientWidth || cv.width)));
+function drawPlan() {
+  const k = fk(plan);
+  const r = state.rec[state.hour];
+  ctx.clearRect(0, 0, plan.width, plan.height);
+  for (let c = 0; c < N; c++) {
+    ctx.fillStyle = color(r.T[c]);
+    ctx.fillRect(OX + (c % NX) * DX * S, OY + ((c / NX) | 0) * DX * S, DX * S + 0.5, DX * S + 0.5);
+  }
+  // Treppe schraffieren
+  ctx.save(); ctx.strokeStyle = 'rgba(0,0,0,.25)'; ctx.lineWidth = 1;
+  for (let x = STAIR[0]; x < STAIR[2]; x += 0.25) {
+    ctx.beginPath(); ctx.moveTo(OX + x * S, OY + STAIR[1] * S); ctx.lineTo(OX + x * S, OY + STAIR[3] * S); ctx.stroke();
+  }
+  ctx.restore();
+  // Wände und Türen
+  for (let f = 0; f < NF; f++) {
+    if (FT[f] === 0) continue;
+    const a = FA[f], b = FB[f], ia = a % NX, ja = (a / NX) | 0, horiz = b - a === 1;
+    const x0 = OX + (horiz ? ia + 1 : ia) * DX * S, y0 = OY + (horiz ? ja : ja + 1) * DX * S;
+    const x1 = horiz ? x0 : x0 + DX * S, y1 = horiz ? y0 + DX * S : y0;
+    if (FT[f] === 2 && state.doors[FD[f]]) continue;
+    ctx.strokeStyle = FT[f] === 2 ? '#b23b2e' : '#222'; ctx.lineWidth = FT[f] === 2 ? 6 : 4;
+    ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  }
+  ctx.strokeStyle = '#111'; ctx.lineWidth = 7; ctx.strokeRect(OX - 3, OY - 3, NX * DX * S + 6, NY * DX * S + 6);
+  // Fenster
+  ctx.strokeStyle = '#4aa3df'; ctx.lineWidth = 5;
+  for (const w of WINDOWS) {
+    ctx.beginPath();
+    if (w.s === 'L' || w.s === 'R') { const x = OX + (w.s === 'L' ? -3 : NX * DX * S + 3); ctx.moveTo(x, OY + w.a * S); ctx.lineTo(x, OY + w.b * S); }
+    else { const y = OY + (w.s === 'T' ? -3 : NY * DX * S + 3); ctx.moveTo(OX + w.a * S, y); ctx.lineTo(OX + w.b * S, y); }
+    ctx.stroke();
+  }
+  // Geräte
+  for (const u of UNITS[state.variant]) {
+    ctx.fillStyle = '#fff'; ctx.strokeStyle = '#1f6feb'; ctx.lineWidth = 2;
+    const w = state.variant === 2 ? 0.84 * S : 0.3 * S, hgt = state.variant === 2 ? 0.84 * S : 0.9 * S;
+    ctx.fillRect(OX + u.x * S - w / 2, OY + u.y * S - hgt / 2, w, hgt); ctx.strokeRect(OX + u.x * S - w / 2, OY + u.y * S - hgt / 2, w, hgt);
+    ctx.fillStyle = '#1f6feb'; ctx.font = '600 13px sans-serif'; ctx.textAlign = 'center'; ctx.fillText('❄', OX + u.x * S, OY + u.y * S + 5);
+  }
+  // Beschriftung
+  ctx.textAlign = 'center';
+  ZN.forEach((n, z) => {
+    const [x, y] = LABEL_POS[z], t = zoneMean(r.T, z);
+    ctx.fillStyle = 'rgba(255,255,255,.8)'; ctx.fillRect(OX + x * S - 42 * k, OY + y * S - 17 * k, 84 * k, 36 * k);
+    ctx.fillStyle = '#111'; ctx.font = `600 ${12 * k}px sans-serif`; ctx.fillText(n, OX + x * S, OY + y * S - 3 * k);
+    ctx.font = `600 ${15 * k}px sans-serif`; ctx.fillText(t.toFixed(1) + ' °C', OX + x * S, OY + y * S + 14 * k);
+  });
+  ctx.fillStyle = '#555'; ctx.font = `${12 * Math.min(k, 1.5)}px sans-serif`; ctx.textAlign = 'left';
+  ctx.fillText('Süd ←', 2, plan.height - 46);
+  ctx.textAlign = 'right'; ctx.fillText('→ Nord', plan.width - 4, plan.height - 46);
+  ctx.textAlign = 'left'; ctx.fillText('0', OX, plan.height - 6);
+  ctx.fillRect(OX, plan.height - 26, S * 2, 4); ctx.fillText('2 m', OX + S * 2 + 6, plan.height - 20);
+  ctx.fillText(k > 1.3 ? 'Tür rot = zu' : `Innenmaß ${(NX * DX).toFixed(2)} × ${(NY * DX).toFixed(2)} m · Treppe schraffiert · Tür rot = zu`, OX + S * 4, plan.height - 20);
+}
+
+function drawLegend() {
+  const l = document.getElementById('legend').getContext('2d'), W = 680;
+  l.clearRect(0, 0, 720, 40);
+  const k = fk(document.getElementById('legend'));
+  for (let x = 0; x < W; x++) { l.fillStyle = color(18 + 22 * x / W); l.fillRect(20 + x, 4, 1, 14); }
+  l.fillStyle = '#333'; l.font = `${11 * Math.min(k, 1.6)}px sans-serif`; l.textAlign = 'center';
+  for (let t = 18; t <= 40; t += k > 1.3 ? 4 : 2) l.fillText(t + '°', 20 + (t - 18) / 22 * W, 32);
+}
+
+const LINE = ['#1f77b4', '#ff7f0e', '#7f7f7f', '#9467bd', '#2ca02c', '#17becf'];
+function drawChart() {
+  const cv = document.getElementById('chart'), g = cv.getContext('2d'), k = fk(cv), L = 30 + 14 * k, R = 705, T0 = 12, B = 250 - 34 * k - 20;
+  g.clearRect(0, 0, cv.width, cv.height);
+  const rec = state.rec, ys = rec.flatMap(r => [r.out, ...ZN.map((_, z) => zoneMean(r.T, z))]);
+  const lo = Math.floor(Math.min(...ys)) - 1, hi = Math.ceil(Math.max(...ys)) + 1;
+  const X = h => L + (R - L) * h / 23, Y = t => B - (B - T0) * (t - lo) / (hi - lo);
+  g.fillStyle = 'rgba(0,0,0,.05)'; g.fillRect(X(0), T0, X(7) - X(0), B - T0); g.fillRect(X(22), T0, X(23) - X(22), B - T0);
+  g.strokeStyle = '#e3e3e0'; g.fillStyle = '#666'; g.font = `${11 * k}px sans-serif`; g.textAlign = 'right';
+  for (let t = Math.ceil(lo / 2) * 2; t <= hi; t += 2) { g.beginPath(); g.moveTo(L, Y(t)); g.lineTo(R, Y(t)); g.stroke(); g.fillText(t + '°', L - 4, Y(t) + 4); }
+  g.textAlign = 'center'; for (let h = 0; h < 24; h += 3) g.fillText(h + ' h', X(h), B + 12 * k + 2);
+  const series = [[rec.map(r => r.out), '#000', 'außen', true], ...ZN.map((n, z) => [rec.map(r => zoneMean(r.T, z)), LINE[z], n])];
+  series.forEach(([v, col, n, dash], i) => {
+    g.strokeStyle = col; g.lineWidth = dash ? 1.2 : 2; g.setLineDash(dash ? [5, 4] : []);
+    g.beginPath(); v.forEach((t, h) => h ? g.lineTo(X(h), Y(t)) : g.moveTo(X(h), Y(t))); g.stroke();
+    g.setLineDash([]); g.fillStyle = col; g.textAlign = 'left'; g.fillText(n, L + (i % 4) * (R - L) / 4, B + (i < 4 ? 26 : 38) * k);
+  });
+  g.strokeStyle = '#1f6feb'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(X(state.hour), T0); g.lineTo(X(state.hour), B); g.stroke();
+}
+
+function drawTable() {
+  const r = state.rec[state.hour], rec = state.rec, night = rec.filter(x => x.h >= 22 || x.h < 7);
+  let html = '<tr><th>Raum</th><th>jetzt</th><th>Nacht Ø</th><th>Nacht max</th></tr>';
+  ZN.forEach((n, z) => {
+    const v = night.map(x => zoneMean(x.T, z));
+    html += `<tr><td>${n}</td><td>${zoneMean(r.T, z).toFixed(1)}</td><td>${(v.reduce((a, b) => a + b) / v.length).toFixed(1)}</td><td>${Math.max(...v).toFixed(1)}</td></tr>`;
+  });
+  document.getElementById('tbl').innerHTML = html;
+  document.getElementById('sumLine').textContent =
+    `Außen ${r.out.toFixed(1)} °C · Kühlleistung jetzt ${(r.p / 1000).toFixed(1)} kW · max. ${(Math.max(...rec.map(x => x.p)) / 1000).toFixed(1)} kW`;
+}
+
+function render() {
+  document.getElementById('hourLbl').textContent = String(state.hour).padStart(2, '0') + ':00';
+  drawPlan(); drawChart(); drawTable();
+}
+
+function run() {
+  document.getElementById('busy').textContent = 'rechne …';
+  setTimeout(() => {
+    state.rec = simulate(state.variant, state.tmax, state.sp, state.doors);
+    document.getElementById('busy').textContent = '';
+    render();
+  }, 20);
+}
+
+function drawDoorBtns() {
+  const box = document.getElementById('doorBtns'); box.innerHTML = '';
+  DOORS.forEach((d, k) => {
+    const b = document.createElement('button');
+    b.className = state.doors[k] ? 'open' : 'closed';
+    b.textContent = `${d.n}: ${state.doors[k] ? 'auf' : 'zu'}`;
+    b.onclick = () => toggleDoor(k); box.appendChild(b);
+  });
+}
+function toggleDoor(k) { state.doors[k] = !state.doors[k]; drawDoorBtns(); run(); }
+
+plan.addEventListener('click', e => {
+  const rc = plan.getBoundingClientRect(), x = ((e.clientX - rc.left) * plan.width / rc.width - OX) / S, y = ((e.clientY - rc.top) * plan.height / rc.height - OY) / S;
+  let best = -1, bd = 0.5;
+  DOORS.forEach((d, k) => {
+    const [px, py] = d.o === 'v' ? [d.at, Math.min(Math.max(y, d.a), d.b)] : [Math.min(Math.max(x, d.a), d.b), d.at];
+    const dist = Math.hypot(x - px, y - py); if (dist < bd) { bd = dist; best = k; }
+  });
+  if (best >= 0) return toggleDoor(best);
+  const i = Math.floor(x / DX), j = Math.floor(y / DX);
+  if (state.rec && i >= 0 && i < NX && j >= 0 && j < NY)
+    document.getElementById('cellInfo').textContent = `${ZN[zone[idx(i, j)]]}, Punkt ${(i * DX).toFixed(2)} / ${(j * DX).toFixed(2)} m: ${state.rec[state.hour].T[idx(i, j)].toFixed(1)} °C um ${state.hour}:00`;
+});
+let rz; addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => { drawLegend(); if (state.rec) render(); }, 150); });
+plan.addEventListener('mousemove', e => {
+  if (!state.rec) return;
+  const rc = plan.getBoundingClientRect(), i = Math.floor(((e.clientX - rc.left) * plan.width / rc.width - OX) / (S * DX)), j = Math.floor(((e.clientY - rc.top) * plan.height / rc.height - OY) / (S * DX));
+  plan.title = i >= 0 && i < NX && j >= 0 && j < NY ? `${ZN[zone[idx(i, j)]]}: ${state.rec[state.hour].T[idx(i, j)].toFixed(1)} °C` : '';
+});
+
+document.getElementById('hour').oninput = e => { state.hour = +e.target.value; render(); };
+document.getElementById('variant').onchange = e => { state.variant = +e.target.value; run(); };
+document.getElementById('tmax').onchange = e => { state.tmax = +e.target.value; run(); };
+document.getElementById('sp').onchange = e => { state.sp = +e.target.value; run(); };
+document.getElementById('allOpen').onclick = () => { state.doors = DOORS.map(() => true); drawDoorBtns(); run(); };
+document.getElementById('allClosed').onclick = () => { state.doors = DOORS.map(() => false); drawDoorBtns(); run(); };
+let timer = null;
+document.getElementById('play').onclick = e => {
+  if (timer) { clearInterval(timer); timer = null; e.target.textContent = '▶ Abspielen'; return; }
+  e.target.textContent = '❚❚ Pause';
+  timer = setInterval(() => { state.hour = (state.hour + 1) % 24; document.getElementById('hour').value = state.hour; render(); }, 600);
+};
+
+drawLegend(); drawDoorBtns(); run();
+</script>
+</body>
+</html>
